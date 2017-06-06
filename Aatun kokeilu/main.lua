@@ -282,10 +282,13 @@ local function reset(event)
 end
 local rikunIdea = false
 local function clock()
-    if rikunIdea == true then
-        gameObjects.y = gameObjects.y -1 
-    end
+    print("hello")
+    gameObjects.y = gameObjects.y - 1
+
 end
+local timerPaused = true
+local opk = timer.performWithDelay(50, clock, 0)
+timer.pause( opk )
 local function move(event)
     local target = event.target
 	if buildTable.buildReady == false then
@@ -308,11 +311,17 @@ local function move(event)
                     end
                 end
                 if event.target.y < 50 then
-                    tmr = timer.performWithDelay(1000, clock, 0)
-                    rikunIdea = true 
-                elseif rikunIdea == true and event.target.y >= 50 then
-                    timer.cancel(tmr)
-                    rikunIdea = false
+                    if timerPaused == true then
+                        timer.resume( opk )
+                        timerPaused = false
+                    end
+                else 
+                    if timerPaused == false then
+                        timer.pause( opk )
+                        timerPaused = true
+                    end
+                        
+                   
                 end
 
 			elseif event.phase == "moved" and ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 55) - event.target.y) and ((event.y - event.yStart) < 0) and (target.alpha <= 0.9) then
