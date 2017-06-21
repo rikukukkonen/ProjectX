@@ -155,7 +155,11 @@ valueTable.width = 100
 valueTable.height = 10
 valueTable.rotation = 0
 valueTable.alpha = 0.5
+local buttonBackground = display.newRect(250, display.actualContentHeight- 20, 600, 50)
+buttonBackground:setFillColor(250,0,0)
+buttonBackground:toBack()
 physics.addBody(lattia, "static", { friction=0.5, bounce=0.3 })
+lattia:toBack()
 --gameObjects:insert(lattia)
 local function decrease(event)
     if event.phase == "ended" and (nameTable[x-1].width > 20) then
@@ -440,8 +444,6 @@ local function move(event)
 		return false
 	end
 end
-local buttonBackground = display.newRect(250, display.actualContentHeight- 20, 600, 50)
-buttonBackground:setFillColor(250,0,0)
 local function materiaaliNappi(event)
    if event.phase == "ended" then
         buildTable.objectPlaced = true
@@ -453,7 +455,6 @@ local function materiaaliNappi(event)
         undoButton = nil
 		resetButton:removeSelf()
         resetButton= nil
-        buttonBackground:toBack()
         button1 = widget.newButton(
             {
                 left = display.viewableContentWidth - 500,
