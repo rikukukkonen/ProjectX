@@ -1,4 +1,5 @@
 local physics = require("physics")
+system.activate( "multitouch" )
 physics.start()
 physics.pause()
 local widget = require("widget")
@@ -7,11 +8,237 @@ local nameTable = {}
 for i=1, 50 do
     nameTable[ #nameTable + 1] = "line"..i
 end
-local lineGroup = display.newGroup()
-local gameObjects = display.newGroup()
+--local gameObjects = display.newGroup()
 local buildTable = {}
 buildTable.buildReady = false
 buildTable.objectPlaced = false
+function getLength( a, b )
+    local width, height = b.x-a.x, b.y-a.y
+    return math.sqrt(width*width + height*height)
+end
+ 
+-- calculates the angle of a point from the 0,0. (When using atan2 the 0 degrees angle is actually pointing east.)
+-- Input args: pt ... { x, y }
+function AngleOfPoint( pt )
+	local x, y = pt.x, pt.y
+	local radian = math.atan2(y,x)
+	local angle = radian*180/math.pi
+	if angle < 0 then angle = 360 + angle end
+	return angle
+end
+ 
+-- calculates the difference between two angles, but this accepts two points, not their angles
+-- Input args: pointA, pointB ... { x, y }
+-- Input args: clockwise ... true|false
+function AngleDiff( pointA, pointB, clockwise )
+	local angleA, angleB = AngleOfPoint( pointA ), AngleOfPoint( pointB )
+	
+	if angleA == angleB then
+		return 0
+	end
+	
+	if clockwise then
+		if angleA > angleB then
+			return angleA - angleB
+			else
+			return 360 - (angleB - angleA)
+		end
+	else
+		if angleA > angleB then
+			return angleB + (360 - angleA)
+			else
+			return angleB - angleA
+		end
+	end
+	
+end
+ 
+--[[
+ This creates a multi-touch tracking object and adds it to a list of multi-touch tracking objects
+ internal to the image being manipulated by the touches.
+ ]]--
+function addTouch( img, event )
+	
+	--[[ Construction ]]--
+	local touch = display.newCircle( event.x, event.y, 50 )
+	touch:setFillColor( 255,0,0,150 )
+	
+	-- this data is required to be able to calculate the motion of the touches.
+	-- basically, if you don't use this function to manage your multiple touch points, you need to
+	-- manage this data yourself, so that the objects passed into the 'makePinchZoom' functions have it.
+	-- the 'makePinchZoom' functions don't call the other args or functions added by this function.
+	touch.xStart, touch.yStart = event.x, event.y
+	touch.xPrev, touch.yPrev = event.x, event.y
+	touch.x, touch.y = event.x, event.y
+	
+	touch.parentImg = img
+	touch.id = event.id
+	
+	-- adds the list in which to keep the multi-touch tracking objects
+	if (touch.parentImg.touchList == nil) then
+		local list = {}
+		
+		function list:indexOf( touch )
+			for i=1, #list do
+				if (list[i] == touch) then
+					return i
+				end
+			end
+			return 0
+		end
+		
+		touch.parentImg.touchList = list
+	end
+	
+	touch.list = touch.parentImg.touchList
+	touch.list[ #touch.list +1 ] = touch
+ 
+	--[[ External functions ]]--
+ 
+	function touch:isFirst()
+		if (touch.list[1] == touch) then
+			return true
+		else
+			return false
+		end
+	end
+ 
+	function touch:indexOf()
+		return touch.list:indexOf( touch )
+	end
+ 
+	--[[ Internal functions ]]--
+	
+	-- basically makes a record of the original event position
+	function touch:began( event )
+		-- should never be called, this is here for convenience, but should never be called
+		touch.xStart, touch.yStart = event.x, event.y
+	end
+	
+	-- moves the touch object and fires the image's touchMoved event listener
+	function touch:moved( event )
+		if (touch.parentImg.touchMoved ~= nil) then
+			touch.xPrev, touch.yPrev = touch.x, touch.y
+			touch.x, touch.y = event.x, event.y
+			touch.parentImg:touchMoved( touch )
+		end
+	end
+	
+	-- removes the touch object
+	function touch:endedCancelled( event )
+		display.getCurrentStage():setFocus( touch, nil )
+		table.remove( touch.list, touch:indexOf() )
+		touch:removeSelf()
+	end
+	
+	-- just calls other functions to deal with the events, to make the code cleaner
+	function touch:touch( event )
+		if (event.phase == "began") then
+			touch:began( event )
+		elseif (event.phase == "moved") then
+			touch:moved( event )
+		elseif (event.phase == "ended" or event.phase == "cancelled") then
+			touch:endedCancelled( event )
+		end
+	end
+ 
+	--[[ Completion ]]--
+ 
+	touch:addEventListener( "touch", touch )
+	display.getCurrentStage():setFocus( touch, event.id )
+ 
+	return touch -- for convenience, but not really used
+end
+ 
+---
+ 
+--[[
+  Adds functions to the image to allow it to be pinch-zoom-able
+  In short: this contains the functions that do the magic.
+  If you want to rip the magic out, just take these functions, remove the 'img:' from their name,
+  and make sure you are managing the x, y, and xPrev, yPrev values to be passed to these functions.
+]]--
+function makePinchZoom( img )
+	-- sets the reference point to be the mid-point between the touches, relative to the img x,y
+	function img:setReference( touchA, touchB )
+		img.xPrevReference = img.xReference
+		img.yPrevReference = img.yReference
+		
+		-- get touch mid-point relative to image
+		local tax = img.x-(img.x - touchA.x)
+		local tay = img.y-(img.y - touchA.y)
+		local tbx = img.x-(img.x - touchB.x)
+		local tby = img.x-(img.y - touchB.y)
+		
+		-- set the position (relative to the image's 0,0) around which scaling and rotation is performed
+		-- see: http://developer.anscamobile.com/content/display-objects#object.xReference
+		img.xReference = (tbx-tax)/2
+		img.yReference = (tby-tay)/2
+	end
+ 
+	-- sets the reference back to it's original value, to avoid screwing with other code which may have used it
+	-- this will usually be 0,0
+	-- set: http://developer.anscamobile.com/content/display-objects#object.xReference
+	function img:unsetReference()
+		img.xReference = img.xPrevReference
+		img.yReference = img.yPrevReference
+		
+		img.xPrevReference = nil
+		img.yPrevReference = nil
+	end
+ 
+	-- moves the image relative to the amount the mid-point between the touches has moved
+	function img:doMove( touchA, touchB )
+		local x = ((touchA.x - touchA.xPrev) + (touchB.x - touchB.xPrev)) / 2
+		local y = ((touchA.y - touchA.yPrev) + (touchB.y - touchB.yPrev)) / 2
+		
+		img.x = img.x + x
+		img.y = img.y + y
+	end
+ 
+	-- rotates the image relative to how much the touch points have moved relative to each other
+	function img:doRotate( touchA, touchB )
+		local prev = AngleOfPoint( { x=touchB.xPrev-touchA.xPrev, y=touchB.yPrev-touchA.yPrev } )
+		local current = AngleOfPoint( { x=touchB.x-touchA.x, y=touchB.y-touchA.y } )
+		
+		img.rotation = img.rotation + (current - prev)
+	end
+ 
+	-- scales the images relative to the previous and current distance between the two touch points
+	function img:doScale( touchA, touchB )
+		local prevLen = getLength( {x=touchA.xPrev, y=touchA.yPrev}, {x=touchB.xPrev, y=touchB.yPrev} )
+		local currentLen = getLength( {x=touchA.x, y=touchA.y}, {x=touchB.x, y=touchB.y} )
+		
+		local scale = currentLen / prevLen
+		
+		img.xScale = img.xScale * scale
+		img.yScale = img.yScale * scale
+	end
+	
+	--[[
+	  This is called by the addTouch functions above.
+	  if you don't want to have my code managing the multi-touch points, you will have to track those
+	  multi-touch events yourself and make sure you can pass the data objects into these functions.
+	  all that this function really does is make sure there are at least 2 multi-touch points known in
+	  the system and passes them in. If you want to do that yourself, just pass in objects with the data:
+	  { x, y, xPrev, yPrev }
+	  It is important to call the setReference and unsetReference functions because they manipulate the
+	  x|yReference values. see: http://developer.anscamobile.com/content/display-objects#object.xReference
+	]]--
+	function img:touchMoved( touch )
+		if (#img.touchList == 1) then
+			img.x, img.y = img.x+(touch.x-touch.xPrev), img.y+(touch.y-touch.yPrev)
+		elseif (#img.touchList == 2) then
+			-- this is the section of code you need to call yourself if you decide to extract this code
+			-- just make sure you always pass in: { x, y, xPrev, yPrev } for each arg
+			img:setReference( img.touchList[1], img.touchList[2] )
+			img:doMove( img.touchList[1], img.touchList[2] )
+			img:doRotate( img.touchList[1], img.touchList[2] )
+			img:doScale( img.touchList[1], img.touchList[2] )
+			img:unsetReference()
+		end
+	end
+end
 local function isCollision( obj, obj2 )
 			if obj2 == nil then
                 return false
@@ -155,7 +382,12 @@ valueTable.width = 100
 valueTable.height = 10
 valueTable.rotation = 0
 valueTable.alpha = 0.5
+local angle = (math.pi/2)
+local buttonBackground = display.newRect(250, display.actualContentHeight- 20, 600, 50)
+buttonBackground:setFillColor( 0,0,1)
+buttonBackground:toBack()
 physics.addBody(lattia, "static", { friction=0.5, bounce=0.3 })
+lattia:toBack()
 --gameObjects:insert(lattia)
 local function decrease(event)
     if event.phase == "ended" and (nameTable[x-1].width > 20) then
@@ -171,6 +403,9 @@ local function decrease(event)
                         end
                     end
                 end
+        if ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 52.5) - nameTable[x-1].y) and (nameTable[x-1].alpha <= 0.9) then
+            nameTable[x-1]:setFillColor(250, 0, 0)
+        end
     end
 end
 local function increase(event)
@@ -187,9 +422,11 @@ local function increase(event)
                         end
                     end
                 end
+        if ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 52.5) - nameTable[x-1].y) and (nameTable[x-1].alpha <= 0.9) then
+            nameTable[x-1]:setFillColor(250, 0, 0)
+        end
     end
 end
-local angle = (math.pi/2)
 local function rotation(event)
     if event.phase == "ended" then
         valueTable.rotation = valueTable.rotation + 15
@@ -203,7 +440,9 @@ local function rotation(event)
                         end
                     end
                 end
-
+        if ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 52.5) - nameTable[x-1].y) and (nameTable[x-1].alpha <= 0.9) then
+            nameTable[x-1]:setFillColor(250, 0, 0)
+        end
     end
     return angle
 end
@@ -220,6 +459,9 @@ local function rotation2(event)
                         end
                     end
                 end
+        if ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 52.5) - nameTable[x-1].y) and (nameTable[x-1].alpha <= 0.9) then
+            nameTable[x-1]:setFillColor(250, 0, 0)
+        end
     end
     return angle
 end
@@ -237,6 +479,9 @@ local function increaseH(event)
                         end
                     end
                 end
+        if ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 52.5) - nameTable[x-1].y) and (nameTable[x-1].alpha <= 0.9) then
+            nameTable[x-1]:setFillColor(250, 0, 0)
+        end
     end
 end
 local function decreaseH(event)
@@ -253,6 +498,9 @@ local function decreaseH(event)
                         end
                     end
                 end
+        if ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 52.5) - nameTable[x-1].y) and (nameTable[x-1].alpha <= 0.9) then
+            nameTable[x-1]:setFillColor(250, 0, 0)
+        end
     end
 end
 local function undo(event)
@@ -281,22 +529,55 @@ local function reset(event)
     end
 end
 local function clockU()
-    gameObjects.y = gameObjects.y + 1
-    lattia.y = lattia.y + 1
+    --gameObjects.y = gameObjects.y + 1
+    for i=1, (x-2) do
+        if nameTable[i] ~= nil then
+            nameTable[i].y = nameTable[i].y + 1
+            nameTable[i]._height = nameTable[i].height
+            nameTable[i]._width = nameTable[i].width
+        end
+    end
+        
+
+        lattia.y = lattia.y + 1
 
 end
 local function clockR()
-    gameObjects.x = gameObjects.x - 1
+    --gameObjects.x = gameObjects.x - 1
+        for i=1, (x-2) do
+            if nameTable[i] ~= nil then
+                nameTable[i].x = nameTable[i].x - 1
+                nameTable[i]._height = nameTable[i].height
+                nameTable[i]._width = nameTable[i].width
+            end
+    
+        end
+        if nameTable[x-2] ~= nil then
+        end
 
 end
 local function clockL()
-    gameObjects.x = gameObjects.x + 1
+    --gameObjects.x = gameObjects.x + 1
+        for i=1, (x-2) do
+            if nameTable[i] ~= nil then
+                nameTable[i].x = nameTable[i].x + 1
+                nameTable[i]._height = nameTable[i].height
+                nameTable[i]._width = nameTable[i].width
+            end
+        end
 
 end
 local function clockD()
     if lattia.y > display.actualContentHeight - 50 then
-        gameObjects.y = gameObjects.y - 1
+        --gameObjects.y = gameObjects.y - 1
         lattia.y = lattia.y - 1
+            for i=1, (x-2) do
+                if nameTable[i] ~= nil then
+                    nameTable[i].y = nameTable[i].y - 1
+                    nameTable[i]._height = nameTable[i].height
+                    nameTable[i]._width = nameTable[i].width
+                end
+            end
     end
 end
 local timerPaused = true
@@ -311,8 +592,6 @@ local opkhp = timer.performWithDelay(50, clockL, 0)
 timer.pause( opkhp )
 local opkhpk = timer.performWithDelay(50, clockD, 0)
 timer.pause( opkhpk )
-print(lattia.y)
-print(display.actualContentHeight - 50)
 local function move(event)
     local target = event.target
 	if buildTable.buildReady == false then
@@ -326,11 +605,18 @@ local function move(event)
 		elseif (target.hasFocus) then
 			if event.phase == "moved" and ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) <= (display.actualContentHeight- 55) - event.target.y) and (target.alpha <= 0.9) then
 				target.x, target.y = (event.x - event.xStart + positionx), (event.y - event.yStart + positiony)
+                if ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 55) - event.target.y) then
+                    event.target:toBack()
+                    print("moi8")
+                end    
                 event.target:setFillColor(250, 250, 250, 100)
+                event.target:toBack()
                 for i =1, (x-2), 1 do
-                    if nameTable[i] ~= nil then
+                    if (nameTable[i] ~= nil) and (nameTable[i] ~= event.target) then
                         if isCollision(event.target, nameTable[i]) then
                             event.target:setFillColor(250, 0, 0)
+                            print("moi4")
+                            nameTable[i]:toBack()
                         end
                     end
                 end
@@ -370,7 +656,6 @@ local function move(event)
                 end
                 if event.target.y > display.viewableContentHeight - 70 then
                         if timerPaused4 == true then
-                            print(lattia.y)
                             timer.resume( opkhpk )
                             timerPaused4 = false
                         end
@@ -380,27 +665,44 @@ local function move(event)
                             timerPaused4 = true
                     end
                 end
+                if ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 55) - event.target.y) and ((event.y - event.yStart) < 0) and (target.alpha <= 0.9) then
+                    event.target:setFillColor(250, 0, 0)
+                    print("moi3")
+                end
 			elseif event.phase == "moved" and ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 55) - event.target.y) and ((event.y - event.yStart) < 0) and (target.alpha <= 0.9) then
-				target.x, target.y = (target.x), (event.y - event.yStart + positiony)
-                event.target:setFillColor(250, 250, 250, 100)
+				target.x, target.y = (event.x - event.xStart + positionx), (event.y - event.yStart + positiony)
+                event.target:setFillColor(250, 0, 0)
+                if ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 55) - event.target.y) then
+                    event.target:toBack()
+                    print("moi7")
+                end  
+                print("moi2")
                 for i =1, (x-2) do
                     if nameTable[i] ~= nil then
                         if isCollision(event.target, nameTable[i]) then
                             event.target:setFillColor(250, 0, 0)
+                            print("moi1")
                         end
                     end
                 end
 			elseif event.phase == "ended" or event.phase == "cancelled" then
-				event.target:setFillColor(250,250,250,100)
+				if ((math.abs(((math.abs(nameTable[x-1].height * math.cos((math.pi / 2)- angle))) + nameTable[x-1].width * (math.abs(math.cos(angle)))) / 2)) > (display.actualContentHeight- 52.5) - event.target.y) and (target.alpha <= 0.9) then 
+                    event.target:setFillColor(250, 0, 0)
+                    print("moi")
+                --else
+                    --event.target:setFillColor(250,250,250,100)
+                end
                 display.getCurrentStage():setFocus(nil)
 				target.hasFocus = false
                 timer.pause( opk )
                 timer.pause( opkh )
                 timer.pause( opkhp )
 				for i=1, (x-2) do
-					if nameTable[i] ~= nil then
+					if nameTable[i] ~= nil and nameTable[i] ~= event.target then
 						if ( isCollision( event.target, nameTable[i] )) then
-							transition.to( event.target, {time=200, x=positionx, y=positiony} )
+							event.target:setFillColor(250,0,0)
+                            print("hei")
+                            nameTable[i]:toBack()
 						end
 					end
 				end
@@ -498,15 +800,14 @@ local function materiaaliNappi(event)
             }
         )
         buttonGroup:insert(button7)
+        --if nameTable[x-1] ~= nil then
+            --gameObjects:insert(nameTable[x-1])
+        --end
         nameTable[x] = display.newRect(250, 100, valueTable.width, valueTable.height)
         valueTable.rotation = 0
 		angle = (math.pi/2)
 		nameTable[x].rotation = valueTable.rotation
         nameTable[x].alpha = valueTable.alpha
-        lineGroup:insert(nameTable[x])
-        if nameTable[x-1] ~= nil then
-            gameObjects:insert(nameTable[x-1])
-        end
         nameTable[x]:toFront()
         nameTable[x]._height = nameTable[x].height
         nameTable[x]._width = nameTable[x].width
@@ -593,10 +894,13 @@ function done(event)
         if crash == false then
         
 							nameTable[x-1].alpha = 1.0
+                            for i=1, (x-1) do
+                                makePinchZoom( nameTable[i] )
+                            end
 							buttonGroup:removeSelf()
 							buttonGroup = nil
 							buttonGroup = display.newGroup()
-                            nameTable[x-1]:toFront()
+                            nameTable[x-1]:toBack()
 							materialButton1()
                             buildTable.objectPlaced = false
         end
